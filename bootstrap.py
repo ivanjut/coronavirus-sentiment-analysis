@@ -108,7 +108,7 @@ from keras.layers import Dense, Activation, Dropout
 from keras.metrics import AUC
 
 print("Loading in full training data...")
-training_data = pd.read_csv('../filtered_tweets.csv')
+training_data = pd.read_csv('../all_tweets_with_labels.csv')
 # training_data = training_data.head(1000)
 print("Tokenizing...")
 training_data['tokens'] = training_data['text'].progress_map(tokenize)
@@ -154,9 +154,10 @@ while not done:
     for j in bad_indices:
         bad_indices_dict[j] = pred[j]
 
-    if len(bad_indices) > 200:
-        joke_indices = np.array(nsmallest(100, bad_indices_dict, key=bad_indices_dict.get))
-        serious_indices = np.array(nlargest(100, bad_indices_dict, key=bad_indices_dict.get))
+    thresh = (2*(i+10))**2
+    if len(bad_indices) > thresh:
+        joke_indices = np.array(nsmallest(int(np.floor(thresh/2)), bad_indices_dict, key=bad_indices_dict.get))
+        serious_indices = np.array(nlargest(int(np.floor(thresh/2)), bad_indices_dict, key=bad_indices_dict.get))
     else:
         joke_indices = np.array([index for index in bad_indices if pred[index] <= 0.5])
         serious_indices = np.array([index for index in bad_indices if pred[index] > 0.5])
@@ -173,7 +174,7 @@ while not done:
     pred[bad_indices] = -1
 
     training_data['Sentiment'] = pred
-    print(training_data[['text', 'Sentiment']])
+    # print(training_data[['text', 'Sentiment']])
 
     # Update training data
     print("Updating new training data...")
@@ -183,6 +184,7 @@ while not done:
     train_vecs_w2v = np.concatenate([buildWordVector(z, n_dim) for z in tqdm(map(lambda x: x.words, X_train))])
     train_vecs_w2v = scale(train_vecs_w2v)
 
+    print("Processed {} tweets.".format(thresh))
     print(len(bad_indices), " unlabeled tweets left.")
     print("Completed epoch {}.".format(i))
     i += 1
