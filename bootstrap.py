@@ -24,7 +24,7 @@ n_dim = 300
 
 #### Load data
 labeled = pd.read_csv('../labeled_tweets.csv')
-labeled = labeled.head(1000)
+# labeled = labeled.head(1000)
 
 
 #### Tokenize all data
@@ -109,7 +109,7 @@ from keras.metrics import AUC
 
 print("Loading in full training data...")
 training_data = pd.read_csv('../filtered_tweets.csv')
-training_data = training_data.head(1000)
+# training_data = training_data.head(1000)
 print("Tokenizing...")
 training_data['tokens'] = training_data['text'].progress_map(tokenize)
 training_data = training_data[training_data.tokens != 'N/A']
@@ -121,15 +121,16 @@ X_train_full = labelizeTweets(np.array(training_data['tokens']), 'TRAIN')
 train_vecs = np.concatenate([buildWordVector(z, n_dim) for z in tqdm(map(lambda x: x.words, X_train_full))])
 train_vecs = scale(train_vecs)
 
+
+from heapq import nlargest, nsmallest
+
 print("Bootstrapping...")
 model = None
-num_bootstrapping_epochs = 3
 done = False
 i = 0
 bad_indices = np.arange(len(training_data))
 jokes_indices_list = np.array([])
 serious_indices_list = np.array([])
-# for i in range(num_bootstrapping_epochs):
 while not done:
 
     model = Sequential()
@@ -149,48 +150,29 @@ while not done:
     predictions = model.predict(train_vecs)
     pred = predictions.flatten()
 
-    # print(pred)
-    # joke_indices = np.where(pred <= 0.35)
-    # serious_indices = np.where(pred >= 0.65)
-    # bad_indices = np.where((0.35 < pred) & (pred < 0.65))
+    bad_indices_dict = {}
+    for j in bad_indices:
+        bad_indices_dict[j] = pred[j]
 
-    pred_df = pd.DataFrame(data=pred, columns=['pred'])
-    pred_df = pred_df.iloc[bad_indices]
-    print(pred_df)
-    serious_indices = pred_df.nlargest(n=100, columns=['pred']).index.values
-    print(serious_indices)
-    joke_indices = pred_df.nsmallest(n=100, columns=['pred']).index.values
+    if len(bad_indices) > 200:
+        joke_indices = np.array(nsmallest(100, bad_indices_dict, key=bad_indices_dict.get))
+        serious_indices = np.array(nlargest(100, bad_indices_dict, key=bad_indices_dict.get))
+    else:
+        joke_indices = np.array([index for index in bad_indices if pred[index] <= 0.5])
+        serious_indices = np.array([index for index in bad_indices if pred[index] > 0.5])
 
-
-    """
-
-    new_preds = pred[bad_indices]
-    # joke_indices = np.argpartition(pred, 100)[:100]
     jokes_indices_list = np.concatenate((jokes_indices_list, joke_indices))
-    # serious_indices = np.argpartition(pred, -100)[-100:]
     serious_indices_list = np.concatenate((serious_indices_list, serious_indices))
-    bad_indices = np.delete(bad_indices, np.concatenate((joke_indices, serious_indices)))
-    print("NUMBER OF BAD INDICES: ", len(bad_indices))
+    bad_indices = np.delete(bad_indices, np.where((np.isin(bad_indices, joke_indices)) | (np.isin(bad_indices, serious_indices))))
     
     if len(bad_indices) == 0:
         done = True
 
-    # print(joke_indices)
-    # print(serious_indices)
-    # print(bad_indices)
     pred[jokes_indices_list.astype(int)] = 0
     pred[serious_indices_list.astype(int)] = 1
     pred[bad_indices] = -1
-    print("TOTAL INDICES SET: ", len(np.concatenate((jokes_indices_list.astype(int), serious_indices_list.astype(int)))))
-    print("TOTAL TRAINING DATA LENGTH: ", len(training_data))
 
-    if i!=0:
-        print(training_data['Sentiment'].value_counts())
-    # training_data['Sentiment'] = pred
-    """
-    training_data.loc[joke_indices, "Sentiment"] = 0
-    training_data.loc[serious_indices, "Sentiment"] = 1
-    print(training_data['Sentiment'].value_counts())
+    training_data['Sentiment'] = pred
     print(training_data[['text', 'Sentiment']])
 
     # Update training data
@@ -201,8 +183,7 @@ while not done:
     train_vecs_w2v = np.concatenate([buildWordVector(z, n_dim) for z in tqdm(map(lambda x: x.words, X_train))])
     train_vecs_w2v = scale(train_vecs_w2v)
 
+    print(len(bad_indices), " unlabeled tweets left.")
     print("Completed epoch {}.".format(i))
     i += 1
     print("***********")
-
-    break
