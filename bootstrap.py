@@ -7,6 +7,7 @@ from string import punctuation
 from random import shuffle
 
 import gensim
+import gensim.downloader as api
 from gensim.models.word2vec import Word2Vec
 TaggedDocument = gensim.models.doc2vec.TaggedDocument # we'll talk about this down below
 
@@ -19,8 +20,7 @@ tokenizer = TweetTokenizer()
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-n_dim = 300
-
+n_dim = 200
 
 #### Load data
 labeled = pd.read_csv('../labeled_tweets.csv')
@@ -50,7 +50,7 @@ processed = postprocess(labeled)
 
 
 #### Train word embeddings
-X_train, X_test, y_train, y_test = train_test_split(np.array(processed['tokens']), np.array(processed['Sentiment']), test_size=0.3)
+X_train, X_test, y_train, y_test = train_test_split(np.array(processed['tokens']), np.array(processed['Sentiment']), test_size=0.5)
 
 def labelizeTweets(tweets, label_type):
     labelized = []
@@ -62,9 +62,11 @@ def labelizeTweets(tweets, label_type):
 X_train = labelizeTweets(X_train, 'TRAIN')
 X_test = labelizeTweets(X_test, 'TEST')
 
-tweet_w2v = Word2Vec(size=n_dim, min_count=1)
-tweet_w2v.build_vocab([x.words for x in tqdm(X_train)])
-tweet_w2v.train([x.words for x in tqdm(X_train)], total_examples=tweet_w2v.corpus_count, epochs=tweet_w2v.epochs)
+# tweet_w2v = Word2Vec(size=n_dim, min_count=1)
+# tweet_w2v.build_vocab([x.words for x in tqdm(X_train)])
+# tweet_w2v.train([x.words for x in tqdm(X_train)], total_examples=tweet_w2v.corpus_count, epochs=tweet_w2v.epochs)
+tweet_w2v = api.load("glove-twitter-200")
+print("pre-trained vocab size: ", len(tweet_w2v.wv.vocab))
 
 # print(tweet_w2v.wv.vocab)
 # print("VIRUS EMBEDDING: ", tweet_w2v['virus'])
@@ -73,8 +75,9 @@ tweet_w2v.train([x.words for x in tqdm(X_train)], total_examples=tweet_w2v.corpu
 
 #### Tweet embeddings
 print('building tf-idf matrix ...')
-vectorizer = TfidfVectorizer(analyzer=lambda x: x, min_df=10)
-matrix = vectorizer.fit_transform([x.words for x in X_train])
+vectorizer = TfidfVectorizer(analyzer=lambda x: x, min_df=3)
+# matrix = vectorizer.fit_transform([x.words for x in X_train])
+matrix = vectorizer.fit_transform(tweet_w2v.wv.vocab)
 tfidf = dict(zip(vectorizer.get_feature_names(), vectorizer.idf_))
 print('vocab size :', len(tfidf))
 
@@ -133,6 +136,7 @@ jokes_indices_list = np.array([])
 serious_indices_list = np.array([])
 while not done:
 
+    ################ CLASSIFICATION METHOD ##########################
     model = Sequential()
     model.add(Dense(128, activation='relu', input_dim=n_dim))
     model.add(Dropout(0.2))
@@ -148,13 +152,15 @@ while not done:
     print("Evaluation accuracy: ", score[1])
 
     predictions = model.predict(train_vecs)
-    pred = predictions.flatten()
+    pred = predictions.flatten()       # should be a 0d numpy vector of predictions
+    ######################################################################
+
 
     bad_indices_dict = {}
     for j in bad_indices:
         bad_indices_dict[j] = pred[j]
 
-    thresh = (2*(i+10))**2
+    thresh = (i+4)**4
     if len(bad_indices) > thresh:
         joke_indices = np.array(nsmallest(int(np.floor(thresh/2)), bad_indices_dict, key=bad_indices_dict.get))
         serious_indices = np.array(nlargest(int(np.floor(thresh/2)), bad_indices_dict, key=bad_indices_dict.get))
