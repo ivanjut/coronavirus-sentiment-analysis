@@ -32,7 +32,7 @@ n_dim = 300
 
 
 #### Load data
-df = pd.read_csv('data/all_tweets_with_labels.csv')
+df = pd.read_csv('../all_tweets_with_labels.csv')
 # labeled = labeled.loc[~(labeled['Sentiment'] == (-1))]
 # labeled.dropna(subset=['Sentiment'], inplace=True)
 print('Initial data shape', df.shape)
@@ -56,7 +56,7 @@ def calc_auc(model, X_test, Y_test):
     except:
         return -1
 
-def pre_process_df(data, return_string=False, remove_emojis=True):
+def pre_process_df(data, return_string=False, remove_emojis=True, test=False):
     data['tokens'] = data['text'].progress_map(lambda tweet: tokenize(tweet, return_string, remove_emojis))
     data['Sentiment'].fillna(-1, inplace=True)
     data['Sentiment'] = data['Sentiment'].map(float)
@@ -64,14 +64,20 @@ def pre_process_df(data, return_string=False, remove_emojis=True):
     data.reset_index(inplace=True)
     data.drop('index', inplace=True, axis=1)
     data.dropna(subset=['tokens','Sentiment'], inplace=True)
-    data.drop(data.columns.difference(['tokens','Sentiment']), 1, inplace=True)
-    countVectorizer = CountVectorizer()
-    # countVectorizer = CountVectorizer(ngram_range=(1, 2))
-    X = countVectorizer.fit_transform(np.array(data['tokens']))
-    X = TfidfTransformer().fit_transform(X)
-    # svd = TruncatedSVD(n_components=100, random_state=42)
-    # X = svd.fit(X)
-    return data, X, countVectorizer
+    # data.drop(data.columns.difference(['tokens','Sentiment']), 1, inplace=True)
+    
+    X = np.array(data['tokens'])
+    countVectorizer = None
+    tfidf = None
+    if not test:
+        countVectorizer = CountVectorizer()
+        # countVectorizer = CountVectorizer(ngram_range=(1, 2))
+        X = countVectorizer.fit_transform(np.array(data['tokens']))
+        tfidf = TfidfTransformer()
+        X = tfidf.fit_transform(X)
+        # svd = TruncatedSVD(n_components=100, random_state=42)
+        # X = svd.fit(X)
+    return data, X, countVectorizer, tfidf
 
 def fit_predict(model, train_indices, training_df, X_test, Y_test, index_to_x, model_name):
 
@@ -116,97 +122,125 @@ def most_polarizing_words(model, countVectorizer, n):
         print('{}: {}'.format(word, coef))
     return strongest_positive, strongest_negative
 
-df, index_to_x, countVectorizer = pre_process_df(df, return_string=True, remove_emojis=False)
+df, index_to_x, countVectorizer, tfidf = pre_process_df(df, return_string=True, remove_emojis=False)
 
 labeled_indices = df[~(df['Sentiment'] == -1)].index.values
 eval_indices = np.random.choice(labeled_indices, size=labeled_indices.shape[0]//2, replace=False)
 
-models = {
-'RC':RidgeClassifier(), 
-'mNB':MultinomialNB(), 
-'LR_l2':LogisticRegression(max_iter=1000, penalty='l2', solver='saga'), 
-'LR_l1':LogisticRegression(max_iter=1000, penalty='l1', solver='saga'),
 
-}
 results = {}
-for model_name, model in models.items():
-    print('\n \n ------------------ {} --------------------------- \n \n'.format(model_name))
-    print(model)
-    eval_df, training_df = df.loc[eval_indices, :], df.drop(index=eval_indices)
-    X_test, Y_test = index_to_x[eval_df.index.values, :], eval_df['Sentiment']
-    print("Bootstrapping...")
+model = MultinomialNB()
+model_name = "Multinomial Naive Bayes"
 
+
+print('\n \n ------------------ {} --------------------------- \n \n'.format(model_name))
+print(model)
+eval_df, training_df = df.loc[eval_indices, :], df.drop(index=eval_indices)
+X_test, Y_test = index_to_x[eval_df.index.values, :], eval_df['Sentiment']
+print("Bootstrapping...")
+
+predicted_tweets = training_df[training_df['Sentiment'] != -1]
+train_indices = predicted_tweets.index.values
+
+done = False
+i = 0
+bad_indices = training_df[training_df['Sentiment'] == -1].index.values
+jokes_indices_list = np.array([])
+serious_indices_list = np.array([])
+
+# print('LR: {}'.format(cross_validate(lr_clf, X_train, Y_train, cv=5, return_train_score=True)))
+# print('SVC: {}'.format(cross_validate(svc_clf, X_train, Y_train, cv=5, return_train_score=True)))
+# print('NB: {}'.format(cross_validate(clf, X_train, Y_train, cv=5, return_train_score=True)))
+# print('RC: {}'.format(cross_validate(ridge_clf, X_train, Y_train, cv=5, return_train_score=True)))
+
+while not done:
+
+    ################ CLASSIFICATION METHOD ##########################
+    bad_indices, pred, model = fit_predict(model, train_indices, training_df, X_test, Y_test, index_to_x, model_name)
+
+
+    ######################################################################
+    assert (bad_indices.shape[0] == pred.shape[0])
+
+    bad_indices_dict = {}
+    for j,index in enumerate(bad_indices):
+        bad_indices_dict[index] = pred[j]
+
+    print('{} bad indices'.format(pred.shape[0]))
+
+    thresh = (i+4)**4
+    if len(bad_indices) > thresh:
+        joke_indices = np.array(nsmallest(int(np.floor(thresh/2)), bad_indices_dict, key=bad_indices_dict.get))
+        serious_indices = np.array(nlargest(int(np.floor(thresh/2)), bad_indices_dict, key=bad_indices_dict.get))
+    else:
+        joke_indices = np.array([index for index in bad_indices if bad_indices_dict[index] <= 0.5])
+        serious_indices = np.array([index for index in bad_indices if bad_indices_dict[index] > 0.5])
+
+    jokes_indices_list = np.concatenate((jokes_indices_list, joke_indices))
+    serious_indices_list = np.concatenate((serious_indices_list, serious_indices))
+    bad_indices = np.delete(bad_indices, np.where((np.isin(bad_indices, joke_indices)) | (np.isin(bad_indices, serious_indices))))
+    
+    if len(bad_indices) == 0:
+        done = True
+
+    # pred[jokes_indices_list.astype(int)] = 0
+    # pred[serious_indices_list.astype(int)] = 1
+    # pred[bad_indices] = -1
+
+    training_df.loc[jokes_indices_list.astype(int), 'Sentiment'] = 0
+    training_df.loc[serious_indices_list.astype(int), 'Sentiment'] = 1
+    # training_df['Sentiment'] = pred
+    # print(training_data[['text', 'Sentiment']])
+
+    # Update training data
+    print("Updating new training data...")
     predicted_tweets = training_df[training_df['Sentiment'] != -1]
+
     train_indices = predicted_tweets.index.values
 
-    done = False
-    i = 0
-    bad_indices = training_df[training_df['Sentiment'] == -1].index.values
-    jokes_indices_list = np.array([])
-    serious_indices_list = np.array([])
+    print("Processed {} tweets.".format(thresh))
+    print(len(bad_indices), " unlabeled tweets left.")
+    print("Completed epoch {}.".format(i))
+    i += 1
+    print("***********")
 
-    # print('LR: {}'.format(cross_validate(lr_clf, X_train, Y_train, cv=5, return_train_score=True)))
-    # print('SVC: {}'.format(cross_validate(svc_clf, X_train, Y_train, cv=5, return_train_score=True)))
-    # print('NB: {}'.format(cross_validate(clf, X_train, Y_train, cv=5, return_train_score=True)))
-    # print('RC: {}'.format(cross_validate(ridge_clf, X_train, Y_train, cv=5, return_train_score=True)))
+bad_indices, pred, model = fit_predict(model, training_df.index.values, training_df, X_test, Y_test, index_to_x, model_name)
 
-    while not done:
+auc = calc_auc(model, X_test, Y_test)
+mean_accuracy = model.score(X_test, Y_test)
+results = (auc, mean_accuracy)
 
-        ################ CLASSIFICATION METHOD ##########################
-        bad_indices, pred, model = fit_predict(model, train_indices, training_df, X_test, Y_test, index_to_x, model_name)
+print("**************************************************")
+print("********** MODEL EVALUATION RESULTS **************")
+print("**************************************************")
+print("ROC-AUC: ", auc)
+print("Mean accuracy: ", mean_accuracy)
 
 
-        ######################################################################
-        assert (bad_indices.shape[0] == pred.shape[0])
+# Make mew predictions
+new_df = pd.read_csv('../filtered_tweets_final.csv')
+print("Length data: ", len(new_df))
 
-        bad_indices_dict = {}
-        for j,index in enumerate(bad_indices):
-            bad_indices_dict[index] = pred[j]
 
-        print('{} bad indices'.format(pred.shape[0]))
+new_df['Sentiment'] = -1
 
-        thresh = (i+4)**4
-        if len(bad_indices) > thresh:
-            joke_indices = np.array(nsmallest(int(np.floor(thresh/2)), bad_indices_dict, key=bad_indices_dict.get))
-            serious_indices = np.array(nlargest(int(np.floor(thresh/2)), bad_indices_dict, key=bad_indices_dict.get))
-        else:
-            joke_indices = np.array([index for index in bad_indices if bad_indices_dict[index] <= 0.5])
-            serious_indices = np.array([index for index in bad_indices if bad_indices_dict[index] > 0.5])
+new_df, _, _, _ = pre_process_df(new_df, return_string=True, remove_emojis=True, test=True)
+print("Finished pre-processing.")
 
-        jokes_indices_list = np.concatenate((jokes_indices_list, joke_indices))
-        serious_indices_list = np.concatenate((serious_indices_list, serious_indices))
-        bad_indices = np.delete(bad_indices, np.where((np.isin(bad_indices, joke_indices)) | (np.isin(bad_indices, serious_indices))))
-        
-        if len(bad_indices) == 0:
-            done = True
+X = tfidf.transform(countVectorizer.transform(new_df['tokens'].values))
 
-        # pred[jokes_indices_list.astype(int)] = 0
-        # pred[serious_indices_list.astype(int)] = 1
-        # pred[bad_indices] = -1
+predictions = model.predict(X)
+probs = model.predict_proba(X)
+print(probs.shape)
+print(probs[:5, :])
 
-        training_df.loc[jokes_indices_list.astype(int), 'Sentiment'] = 0
-        training_df.loc[serious_indices_list.astype(int), 'Sentiment'] = 1
-        # training_df['Sentiment'] = pred
-        # print(training_data[['text', 'Sentiment']])
+print("Length: ", len(predictions))
+print(len(predictions) == len(new_df))
 
-        # Update training data
-        print("Updating new training data...")
-        predicted_tweets = training_df[training_df['Sentiment'] != -1]
+new_df['Sentiment'] = predictions
+new_df['sentiment_probs'] = probs[:, 1] 
 
-        train_indices = predicted_tweets.index.values
+print(new_df[['text', 'Sentiment', 'sentiment_probs']].head(20))
+print(new_df['Sentiment'].value_counts())
 
-        print("Processed {} tweets.".format(thresh))
-        print(len(bad_indices), " unlabeled tweets left.")
-        print("Completed epoch {}.".format(i))
-        i += 1
-        print("***********")
-
-    bad_indices, pred, model = fit_predict(model, training_df.index.values, training_df, X_test, Y_test, index_to_x, model_name)
-
-    auc = calc_auc(model, X_test, Y_test)
-    mean_accuracy = model.score(X_test, Y_test)
-    results[model_name] = (auc, mean_accuracy)
-
-for model_name, res in results.items():
-    print('{}: {}'.format(model_name, res))
-    most_polarizing_words(model, countVectorizer, 20)
+new_df.to_csv('../predictions.csv')
