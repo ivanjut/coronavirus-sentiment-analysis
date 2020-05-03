@@ -6,6 +6,8 @@ pd.options.mode.chained_assignment = None
 from copy import deepcopy
 from string import punctuation
 from random import shuffle
+import dill
+import pickle
 
 import gensim
 from gensim.models.word2vec import Word2Vec
@@ -70,7 +72,7 @@ def pre_process_df(data, return_string=False, remove_emojis=True, test=False):
     countVectorizer = None
     tfidf = None
     if not test:
-        countVectorizer = CountVectorizer()
+        countVectorizer = CountVectorizer(max_features=10000)
         # countVectorizer = CountVectorizer(ngram_range=(1, 2))
         X = countVectorizer.fit_transform(np.array(data['tokens']))
         tfidf = TfidfTransformer()
@@ -122,7 +124,7 @@ def most_polarizing_words(model, countVectorizer, n):
         print('{}: {}'.format(word, coef))
     return strongest_positive, strongest_negative
 
-df, index_to_x, countVectorizer, tfidf = pre_process_df(df, return_string=True, remove_emojis=False)
+df, index_to_x, countVectorizer, tfidfVectorizer = pre_process_df(df, return_string=True, remove_emojis=False)
 
 labeled_indices = df[~(df['Sentiment'] == -1)].index.values
 eval_indices = np.random.choice(labeled_indices, size=labeled_indices.shape[0]//2, replace=False)
@@ -216,6 +218,21 @@ print("**************************************************")
 print("ROC-AUC: ", auc)
 print("Mean accuracy: ", mean_accuracy)
 
+
+# store vectorizers and model
+dill.dump(countVectorizer, open('countVectorizer.pk', 'wb'))
+dill.dump(tfidfVectorizer, open('tfidfVectorizer.pk', 'wb'))
+with open('model.pkl', 'wb') as f:
+    pickle.dump(model, f)
+
+# # load vectorizers and model
+# with open('model.pkl', 'rb') as f:
+#     model = pickle.load(f)
+# countVectorizer = dill.load(open('countVectorizer.pk', 'rb'))
+# tfidfVectorizer = dill.load(open('tfidfVectorizer.pk', 'rb'))
+# print(model)
+# print(countVectorizer)
+# print(tfidfVectorizer)
 
 # Make mew predictions
 new_df = pd.read_csv('../filtered_tweets_final.csv')
